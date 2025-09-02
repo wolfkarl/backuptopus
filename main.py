@@ -5,12 +5,16 @@ import os
 from datetime import datetime
 import tarfile
 
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
 BACKUP_DIR = "data"
 TMP_DIR = "tmp"
 
-FILE_TARGETS = [
-    "~/basti",
-]
+FILE_TARGETS = os.getenv("FILE_TARGETS", "").split(";")
+PG_TARGTETS = os.getenv("PG_TARGETS", "").split(";")
 
 FORMAT = "%(message)s"
 logging.basicConfig(
@@ -23,8 +27,10 @@ def main():
 
 def do_backup():
     logging.info("Performing backup...")
+    
     # create timestamped backup directory
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
+    
     tmpdir = f"{TMP_DIR}/backup_{timestamp}"
     os.makedirs(tmpdir, exist_ok=False)
     logging.info(f"Created backup directory: {tmpdir}")
