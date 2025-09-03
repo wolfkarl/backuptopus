@@ -1,6 +1,8 @@
-FROM python:3.11.2
+# FROM python:3.11.2
+FROM debian:trixie
+
 COPY --from=docker.io/astral/uv:latest /uv /uvx /bin/
-RUN apt-get update && apt install postgresql-client -y && apt-get -y install cron
+RUN apt-get update && apt install postgresql-client-17 -y && apt-get -y install cron
 
 WORKDIR /app/backuptopus
 

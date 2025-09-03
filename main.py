@@ -9,6 +9,7 @@ import requests
 
 # load environment variables from .env file for dev
 from dotenv import load_dotenv
+import socket
 load_dotenv()
 
 BACKUP_DIR = os.getenv("BACKUP_DIR", default="./data")
@@ -99,10 +100,12 @@ def do_backup():
             else "{:.2f} MB".format(total_backup_size / (1024 ** 2))
         )
 
+        hostname = socket.gethostname()
+
         payload = {
             "username": "backuptopus",
             "channel": "mms-backups",
-            "text": "Backup completed successfully 🦑\n",
+            "text": f"Backup on {hostname} completed successfully 🦑\n",
             "attachments": [
             {
                 "color": "#36a64f",
