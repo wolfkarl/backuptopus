@@ -18,14 +18,19 @@ FILE_TARGETS = os.getenv("FILE_TARGETS", "").split(";")
 PG_TARGETS = os.getenv("PG_TARGETS", "").split(";")
 MMS_WEBHOOK = os.getenv("MMS_WEBHOOK", "")
 
+MAX_DAILY = 7
+MAX_MONTHLY = 6
+MAX_YEARLY = 10
+
 FORMAT = "%(message)s"
 logging.basicConfig(
-    level="INFO", format=FORMAT, datefmt="[%X]", handlers=[RichHandler()]
+    level="DEBUG", format=FORMAT, datefmt="[%X]", handlers=[RichHandler()]
 )
 
 
 def do_backup():
     logging.info("Backuptopus performing backup... 🦑")
+    logging.debug(f"Environment: {os.environ}")
     
     # create timestamped backup directory
     timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
@@ -76,31 +81,107 @@ def do_backup():
     os.system(f"rm -rf {tmpdir}")
     logging.info(f"Cleaned up temporary directory: {tmpdir}")
 
+
+    # rotate old backups
+    logging.info("Rotating old backups...")
+    rotate_backups()
+
     # mattermost notification
     if MMS_WEBHOOK:
+        total_backup_size = sum(
+            os.path.getsize(os.path.join(BACKUP_DIR, f))
+            for f in os.listdir(BACKUP_DIR)
+            if f.endswith(".tar.gz")
+        )
+        human_total_backup_size = (
+            "{:.2f} GB".format(total_backup_size / (1024 ** 3))
+            if total_backup_size > (1024 ** 3)
+            else "{:.2f} MB".format(total_backup_size / (1024 ** 2))
+        )
+
         payload = {
             "username": "backuptopus",
             "channel": "mms-backups",
             "text": "Backup completed successfully 🦑\n",
             "attachments": [
+            {
+                "color": "#36a64f",
+                "fields": [
+                {"title": "Archive Name", "value": os.path.basename(archive_name), "short": True},
+                {"title": "Archive Size", "value": human_size, "short": True},
+                *[
+                    {"title": f"DB: {db}", "value": "{:.2f} MB".format(size / (1024 * 1024)) if size > 1024 * 1024 else "{:.2f} KB".format(size / 1024), "short": True}
+                    for db, size in dump_sizes.items()
+                ],
                 {
-                    "color": "#36a64f",
-                    "fields": [
-                        {"title": "Archive Name", "value": os.path.basename(archive_name), "short": True},
-                        {"title": "Archive Size", "value": human_size, "short": True},
-                        *[
-                            {"title": f"DB: {db}", "value": "{:.2f} MB".format(size / (1024 * 1024)) if size > 1024 * 1024 else "{:.2f} KB".format(size / 1024), "short": True}
-                            for db, size in dump_sizes.items()
-                        ]
-                    ],
+                    "title": "Backups in Folder",
+                    "value": str(len([f for f in os.listdir(BACKUP_DIR) if f.endswith(".tar.gz")])),
+                    "short": True
+                },
+                {
+                    "title": "Total Backup Size",
+                    "value": human_total_backup_size,
+                    "short": True
+                },
+                {
+                    "title": "Free Disk Space",
+                    "value": "{:.2f} GB".format(os.statvfs(BACKUP_DIR).f_bavail * os.statvfs(BACKUP_DIR).f_frsize / (1024 ** 3)),
+                    "short": True
                 }
-            ],
+                ],
             }
+            ],
+        }
         response = requests.post(MMS_WEBHOOK, json=payload)
         if response.status_code == 200:
             logging.info("Sent Mattermost notification.")
         else:
             logging.error(f"Failed to send Mattermost notification. Status code: {response.status_code}")
+    else:
+        logging.info("No Mattermost webhook URL configured, skipping notification.")   
+
+def rotate_backups():
+    backups = sorted(
+        [f for f in os.listdir(BACKUP_DIR) if f.startswith("backup_") and f.endswith(".tar.gz")]
+    )
+    daily, weekly, yearly = [], [], []
+    for fname in backups:
+        try:
+            ts = fname.split("_")[1]  # e.g. backup_20240611_153000.tar.gz
+            dt = datetime.strptime(ts, "%Y%m%d")
+        except Exception:
+            continue
+        # yearly: keep first backup of each year
+        if not yearly or dt.year != yearly[-1][1].year:
+            yearly.append((fname, dt))
+        # monthly: keep first backup of each month
+        if not weekly or (dt.year, dt.month) != (weekly[-1][1].year, weekly[-1][1].month):
+            weekly.append((fname, dt))
+        # daily: keep first backup of each day
+        if not daily or dt.date() != daily[-1][1].date():
+            daily.append((fname, dt))
+
+    logging.debug([daily, weekly, yearly])
+
+    keep = set()
+    keep.update(f for f, _ in daily[-MAX_DAILY:])
+    keep.update(f for f, _ in weekly[-MAX_MONTHLY:])
+    keep.update(f for f, _ in yearly[-MAX_YEARLY:])
+
+    num_removed = 0
+
+    for fname in backups:
+        if fname not in keep:
+            try:
+                os.remove(os.path.join(BACKUP_DIR, fname))
+                logging.info(f"Removed old backup: {fname}")
+                num_removed += 1
+            except Exception as e:
+                logging.warning(f"Failed to remove {fname}: {e}")
+
+    logging.info(f"Rotation complete. Removed {num_removed} old backups.")
+    return num_removed
 
 if __name__ == "__main__":
     do_backup()
+
