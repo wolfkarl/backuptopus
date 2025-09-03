@@ -4,17 +4,19 @@ from rich.logging import RichHandler
 import os
 from datetime import datetime
 import tarfile
+import requests
 
+
+# load environment variables from .env file for dev
 from dotenv import load_dotenv
-
-
 load_dotenv()
 
-BACKUP_DIR = "data"
-TMP_DIR = "tmp"
+BACKUP_DIR = os.getenv("BACKUP_DIR", default="./data")
+TMP_DIR = os.getenv("TMP_DIR", default="./tmp")
 
 FILE_TARGETS = os.getenv("FILE_TARGETS", "").split(";")
-PG_TARGTETS = os.getenv("PG_TARGETS", "").split(";")
+PG_TARGETS = os.getenv("PG_TARGETS", "").split(";")
+MMS_WEBHOOK = os.getenv("MMS_WEBHOOK", "")
 
 FORMAT = "%(message)s"
 logging.basicConfig(
@@ -22,11 +24,8 @@ logging.basicConfig(
 )
 
 
-def main():
-    logging.info("Hello from pybackup!")
-
 def do_backup():
-    logging.info("Performing backup...")
+    logging.info("Backuptopus performing backup... 🦑")
     
     # create timestamped backup directory
     timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
@@ -44,8 +43,9 @@ def do_backup():
         else:
             logging.warning(f"Target path does not exist: {target_path}")
 
-        # connect to psql and dump databases
-    for postgres_connection_string in PG_TARGTETS:
+    # connect to psql and dump databases
+    dump_sizes = {}
+    for postgres_connection_string in PG_TARGETS:
         if not postgres_connection_string:
             continue
         db_name = postgres_connection_string.split("/")[-1]
@@ -56,6 +56,7 @@ def do_backup():
         if os.path.exists(dump_file):
             dump_size = os.path.getsize(dump_file)
             human_dump_size = "{:.2f} MB".format(dump_size / (1024 * 1024)) if dump_size > 1024 * 1024 else "{:.2f} KB".format(dump_size / 1024)
+            dump_sizes[db_name] = dump_size
             logging.info(f"Dump file size for {db_name}: {human_dump_size}")
         else:
             logging.warning(f"Dump file not found for {db_name}: {dump_file}")
@@ -75,10 +76,31 @@ def do_backup():
     os.system(f"rm -rf {tmpdir}")
     logging.info(f"Cleaned up temporary directory: {tmpdir}")
 
-
-
-
+    # mattermost notification
+    if MMS_WEBHOOK:
+        payload = {
+            "username": "backuptopus",
+            "channel": "mms-backups",
+            "text": "Backup completed successfully 🦑\n",
+            "attachments": [
+                {
+                    "color": "#36a64f",
+                    "fields": [
+                        {"title": "Archive Name", "value": os.path.basename(archive_name), "short": True},
+                        {"title": "Archive Size", "value": human_size, "short": True},
+                        *[
+                            {"title": f"DB: {db}", "value": "{:.2f} MB".format(size / (1024 * 1024)) if size > 1024 * 1024 else "{:.2f} KB".format(size / 1024), "short": True}
+                            for db, size in dump_sizes.items()
+                        ]
+                    ],
+                }
+            ],
+            }
+        response = requests.post(MMS_WEBHOOK, json=payload)
+        if response.status_code == 200:
+            logging.info("Sent Mattermost notification.")
+        else:
+            logging.error(f"Failed to send Mattermost notification. Status code: {response.status_code}")
 
 if __name__ == "__main__":
-    main()
     do_backup()
